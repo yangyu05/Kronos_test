@@ -1,5 +1,4 @@
 numpy
-pandas
 torch
 
 einops==0.8.1
