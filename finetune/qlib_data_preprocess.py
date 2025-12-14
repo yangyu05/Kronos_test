@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import pandas as pd
 import qlib
-from qlib.config import REG_CN
+from qlib.config import REG_CN, REG_US
 from qlib.data import D
 from qlib.data.dataset.loader import QlibDataLoader
 from tqdm import trange
@@ -25,7 +25,10 @@ class QlibDataPreprocessor:
     def initialize_qlib(self):
         """Initializes the Qlib environment."""
         print("Initializing Qlib...")
-        qlib.init(provider_uri=self.config.qlib_data_path, region=REG_CN)
+        # Use REG_US for US market, REG_CN for Chinese market
+        region = REG_US if self.config.market_region == 'us' else REG_CN
+        print(f"Using region: {self.config.market_region} ({region})")
+        qlib.init(provider_uri=self.config.qlib_data_path, region=region)
 
     def load_qlib_data(self):
         """

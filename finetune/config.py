@@ -9,9 +9,16 @@ class Config:
         # =================================================================
         # Data & Feature Parameters
         # =================================================================
+        # Market region: 'cn' for Chinese market, 'us' for US market
+        self.market_region = 'us'  # Change to 'cn' for Chinese market
+        
         # TODO: Update this path to your Qlib data directory.
-        self.qlib_data_path = "~/.qlib/qlib_data/cn_data"
-        self.instrument = 'csi300'
+        if self.market_region == 'us':
+            self.qlib_data_path = "~/.qlib/qlib_data/us_data"
+            self.instrument = 'sp500'  # Options: 'sp500', 'nasdaq100', 'dow30', 'all'
+        else:
+            self.qlib_data_path = "~/.qlib/qlib_data/cn_data"
+            self.instrument = 'csi300'
 
         # Overall time range for data loading from Qlib.
         self.dataset_begin_time = "2011-01-01"
@@ -120,12 +127,29 @@ class Config:
         self.backtest_benchmark = self._set_benchmark(self.instrument)
 
     def _set_benchmark(self, instrument):
-        dt_benchmark = {
+        # Chinese market benchmarks
+        cn_benchmark = {
             'csi800': "SH000906",
             'csi1000': "SH000852",
             'csi300': "SH000300",
         }
-        if instrument in dt_benchmark:
-            return dt_benchmark[instrument]
+        # US market benchmarks (using SPY as proxy for S&P 500)
+        us_benchmark = {
+            'sp500': "SPY",
+            'nasdaq100': "QQQ",
+            'dow30': "DIA",
+            'all': "SPY",  # Default to SPY for 'all'
+        }
+        
+        if self.market_region == 'us':
+            if instrument in us_benchmark:
+                return us_benchmark[instrument]
+            else:
+                # Default to SPY if instrument not found
+                print(f"WARNING: Benchmark not defined for US instrument: {instrument}, using SPY")
+                return "SPY"
         else:
-            raise ValueError(f"Benchmark not defined for instrument: {instrument}")
+            if instrument in cn_benchmark:
+                return cn_benchmark[instrument]
+            else:
+                raise ValueError(f"Benchmark not defined for instrument: {instrument}")
