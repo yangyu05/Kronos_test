@@ -44,7 +44,8 @@ class Config:
         self.test_time_range = ["2024-04-01", "2025-06-05"]
         self.backtest_time_range = ["2024-07-01", "2025-06-05"]
 
-        # TODO: Directory to save the processed, pickled datasets.
+        # Directory to save the processed, pickled datasets.
+        # This will be created automatically if it doesn't exist.
         self.dataset_path = "./data/processed_datasets"
 
         # =================================================================
@@ -79,23 +80,26 @@ class Config:
         # =================================================================
         # Experiment Logging & Saving
         # =================================================================
-        self.use_comet = True # Set to False if you don't want to use Comet ML
+        # Set to False if you don't want to use Comet ML
+        # If using Comet ML, set your API key via environment variable: export COMET_API_KEY=your_key
+        self.use_comet = False  # Set to True and configure below if you want to use Comet ML
         self.comet_config = {
             # It is highly recommended to load secrets from environment variables
             # for security purposes. Example: os.getenv("COMET_API_KEY")
-            "api_key": "YOUR_COMET_API_KEY",
-            "project_name": "Kronos-Finetune-Demo",
-            "workspace": "your_comet_workspace" # TODO: Change to your Comet ML workspace name
+            "api_key": os.getenv("COMET_API_KEY", "YOUR_COMET_API_KEY"),
+            "project_name": "Kronos-Finetune-US-Market",
+            "workspace": os.getenv("COMET_WORKSPACE", "your_comet_workspace")  # TODO: Change to your Comet ML workspace name
         }
-        self.comet_tag = 'finetune_demo'
-        self.comet_name = 'finetune_demo'
+        self.comet_tag = 'finetune_us_market'
+        self.comet_name = 'finetune_us_market'
 
         # Base directory for saving model checkpoints and results.
         # Using a general 'outputs' directory is a common practice.
+        # These directories will be created automatically if they don't exist.
         self.save_path = "./outputs/models"
-        self.tokenizer_save_folder_name = 'finetune_tokenizer_demo'
-        self.predictor_save_folder_name = 'finetune_predictor_demo'
-        self.backtest_save_folder_name = 'finetune_backtest_demo'
+        self.tokenizer_save_folder_name = 'finetune_tokenizer_us_market'
+        self.predictor_save_folder_name = 'finetune_predictor_us_market'
+        self.backtest_save_folder_name = 'finetune_backtest_us_market'
 
         # Path for backtesting results.
         self.backtest_result_path = "./outputs/backtest_results"
@@ -103,10 +107,13 @@ class Config:
         # =================================================================
         # Model & Checkpoint Paths
         # =================================================================
-        # TODO: Update these paths to your pretrained model locations.
+        # Pretrained model paths from Hugging Face Hub
+        # Available models:
+        #   - Tokenizer: NeoQuasar/Kronos-Tokenizer-base, NeoQuasar/Kronos-Tokenizer-2k
+        #   - Models: NeoQuasar/Kronos-mini, NeoQuasar/Kronos-small, NeoQuasar/Kronos-base
         # These can be local paths or Hugging Face Hub model identifiers.
-        self.pretrained_tokenizer_path = "path/to/your/Kronos-Tokenizer-base"
-        self.pretrained_predictor_path = "path/to/your/Kronos-small"
+        self.pretrained_tokenizer_path = "NeoQuasar/Kronos-Tokenizer-base"
+        self.pretrained_predictor_path = "NeoQuasar/Kronos-small"
 
         # Paths to the fine-tuned models, derived from the save_path.
         # These will be generated automatically during training.
