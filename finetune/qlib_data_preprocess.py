@@ -2,6 +2,15 @@ import os
 import pickle
 import numpy as np
 import pandas as pd
+
+# Set up gymnasium as gym replacement BEFORE importing qlib
+import sys
+try:
+    import gymnasium
+    sys.modules['gym'] = gymnasium
+except ImportError:
+    pass  # Fall back to gym if gymnasium not available
+
 import qlib
 from qlib.config import REG_CN, REG_US
 from qlib.data import D

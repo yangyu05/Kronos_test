@@ -4,6 +4,15 @@ import argparse
 import pickle
 from collections import defaultdict
 
+# Set up gymnasium as gym replacement BEFORE importing qlib
+# This must be done before any qlib imports since qlib imports gym internally
+try:
+    import gymnasium
+    sys.modules['gym'] = gymnasium
+    print("✓ Using gymnasium as gym replacement")
+except ImportError:
+    print("⚠ Warning: gymnasium not found, falling back to gym (may have NumPy 2.0 issues)")
+
 import numpy as np
 import pandas as pd
 import torch
