@@ -22,7 +22,7 @@ class Config:
 
         # Overall time range for data loading from Qlib.
         self.dataset_begin_time = "2011-01-01"
-        self.dataset_end_time = '2025-06-05'
+        self.dataset_end_time = '2020-11-10'  # Updated to match available Qlib data
 
         # Sliding window parameters for creating samples.
         self.lookback_window = 90  # Number of past time steps for input.
@@ -39,10 +39,11 @@ class Config:
         # =================================================================
         # Note: The validation/test set starts earlier than the training/validation set ends
         # to account for the `lookback_window`.
-        self.train_time_range = ["2011-01-01", "2022-12-31"]
-        self.val_time_range = ["2022-09-01", "2024-06-30"]
-        self.test_time_range = ["2024-04-01", "2025-06-05"]
-        self.backtest_time_range = ["2024-07-01", "2025-06-05"]
+        # Updated time ranges to match available Qlib data (ends 2020-11-10)
+        self.train_time_range = ["2011-01-01", "2018-12-31"]
+        self.val_time_range = ["2018-09-01", "2020-05-31"]
+        self.test_time_range = ["2020-04-01", "2020-11-10"]
+        self.backtest_time_range = ["2020-07-01", "2020-11-10"]  # Updated to match available data
 
         # Directory to save the processed, pickled datasets.
         # This will be created automatically if it doesn't exist.

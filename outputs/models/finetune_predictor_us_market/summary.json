@@ -1,0 +1,8 @@
+{
+    "start_time": "2025-12-24T23-44-09",
+    "save_directory": "./outputs/models/finetune_predictor_us_market",
+    "world_size": 1,
+    "final_result": {
+        "best_val_loss": 0
+    }
+}

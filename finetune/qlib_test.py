@@ -12,7 +12,8 @@ from tqdm import trange, tqdm
 from matplotlib import pyplot as plt
 
 import qlib
-from qlib.config import REG_CN
+from qlib.config import REG_CN, REG_US
+from qlib.data import D
 from qlib.backtest import backtest, executor, CommonInfrastructure
 from qlib.contrib.evaluate import risk_analysis
 from qlib.contrib.strategy import TopkDropoutStrategy
@@ -105,7 +106,8 @@ class QlibBacktest:
     def initialize_qlib(self):
         """Initializes the Qlib environment."""
         print("Initializing Qlib for backtesting...")
-        qlib.init(provider_uri=self.config.qlib_data_path, region=REG_CN)
+        region = REG_US if self.config.market_region == 'us' else REG_CN
+        qlib.init(provider_uri=self.config.qlib_data_path, region=region)
 
     def run_single_backtest(self, signal_series: pd.Series) -> pd.DataFrame:
         """
@@ -128,9 +130,25 @@ class QlibBacktest:
             "generate_portfolio_metrics": True,
             "delay_execution": True,
         }
+        
+        # Get available calendar and adjust end_time to avoid out-of-bounds error
+        # Qlib's backtest accesses calendar[index + 1], so we need at least one day buffer
+        cal = D.calendar()
+        if len(cal) > 1:
+            # Use the second-to-last date to ensure calendar[index + 1] is valid
+            safe_end_date = pd.Timestamp(cal[-2])
+            configured_end_time = pd.Timestamp(self.config.backtest_time_range[1])
+            # Use the earlier of configured end time or the safe end date
+            safe_end_time = min(configured_end_time, safe_end_date)
+            if safe_end_time < configured_end_time:
+                print(f"⚠️  Adjusting backtest end_time from {configured_end_time.date()} to {safe_end_time.date()} to avoid calendar boundary")
+            end_time_str = safe_end_time.strftime('%Y-%m-%d')
+        else:
+            end_time_str = self.config.backtest_time_range[1]
+        
         backtest_config = {
             "start_time": self.config.backtest_time_range[0],
-            "end_time": self.config.backtest_time_range[1],
+            "end_time": end_time_str,
             "account": 100_000_000,
             "benchmark": self.config.backtest_benchmark,
             "exchange_kwargs": {
@@ -208,8 +226,26 @@ def load_models(config: dict) -> tuple[KronosTokenizer, Kronos]:
     """Loads the fine-tuned tokenizer and predictor model."""
     device = torch.device(config['device'])
     print(f"Loading models onto device: {device}...")
-    tokenizer = KronosTokenizer.from_pretrained(config['tokenizer_path']).to(device).eval()
-    model = Kronos.from_pretrained(config['model_path']).to(device).eval()
+    
+    # Convert relative paths to absolute paths
+    tokenizer_path = config['tokenizer_path']
+    model_path = config['model_path']
+    
+    if not os.path.isabs(tokenizer_path):
+        # Get the project root (parent of finetune directory)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        tokenizer_path = os.path.join(project_root, tokenizer_path)
+    
+    if not os.path.isabs(model_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        model_path = os.path.join(project_root, model_path)
+    
+    print(f"Loading weights from local directory")
+    tokenizer = KronosTokenizer.from_pretrained(tokenizer_path).to(device).eval()
+    print(f"Loading weights from local directory")
+    model = Kronos.from_pretrained(model_path).to(device).eval()
     return tokenizer, model
 
 
@@ -303,6 +339,8 @@ def main():
     """Main function to set up config, run inference, and execute backtesting."""
     parser = argparse.ArgumentParser(description="Run Kronos Inference and Backtesting")
     parser.add_argument("--device", type=str, default="cuda:1", help="Device for inference (e.g., 'cuda:0', 'cpu')")
+    parser.add_argument("--symbols", type=str, nargs='+', default=['QQQ', 'DIA', 'SPY'],
+                        help="Symbols to focus on (default: QQQ DIA SPY). Note: If ETFs not available, use stocks like: AAPL MSFT GOOGL")
     args = parser.parse_args()
 
     # --- 1. Configuration Setup ---
@@ -336,7 +374,28 @@ def main():
     print(f"Loading test data from {test_data_path}...")
     with open(test_data_path, 'rb') as f:
         test_data = pickle.load(f)
-    print(test_data)
+    
+    # Filter to focus on specified symbols
+    target_symbols = args.symbols
+    print(f"\nFiltering test data to focus on key symbols: {target_symbols}")
+    filtered_test_data = {}
+    for symbol in target_symbols:
+        if symbol in test_data and len(test_data[symbol]) > 0:
+            filtered_test_data[symbol] = test_data[symbol]
+            print(f"  ✓ {symbol}: {len(test_data[symbol])} data points")
+        else:
+            print(f"  ✗ {symbol}: Not found in test data")
+    
+    if len(filtered_test_data) == 0:
+        print("\n⚠️  WARNING: None of the target symbols were found in test data!")
+        print(f"Available symbols (first 50): {list(test_data.keys())[:50]}")
+        print("\nNote: QQQ, DIA, SPY are ETFs and may not be in S&P 500 stock dataset.")
+        print("Try using major stocks like: AAPL MSFT GOOGL AMZN TSLA META")
+        return
+    
+    print(f"\nUsing {len(filtered_test_data)} symbol(s) for backtesting")
+    test_data = filtered_test_data
+    
     # --- 3. Generate Predictions ---
     model_preds = generate_predictions(run_config, test_data)
 
