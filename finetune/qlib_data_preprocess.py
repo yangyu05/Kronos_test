@@ -67,18 +67,9 @@ class QlibDataPreprocessor:
         real_end_time = cal[adjusted_end_index]
 
         # Load data using Qlib's data loader.
-        # If custom_symbols is specified, use it; otherwise use the instrument name
-        if self.config.custom_symbols is not None:
-            print(f"Using custom symbol list: {self.config.custom_symbols}")
-            # QlibDataLoader can accept a list of symbols directly
-            data_df = QlibDataLoader(config=data_fields_qlib).load(
-                self.config.custom_symbols, real_start_time, real_end_time
-            )
-        else:
-            print(f"Using instrument: {self.config.instrument}")
-            data_df = QlibDataLoader(config=data_fields_qlib).load(
-                self.config.instrument, real_start_time, real_end_time
-            )
+        data_df = QlibDataLoader(config=data_fields_qlib).load(
+            self.config.instrument, real_start_time, real_end_time
+        )
         data_df = data_df.stack().unstack(level=1)  # Reshape for easier access.
 
         symbol_list = list(data_df.columns)

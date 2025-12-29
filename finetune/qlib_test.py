@@ -110,11 +110,6 @@ class QlibBacktest:
 
     def __init__(self, config: Config):
         self.config = config
-        print(f"\n--- Backtest Configuration ---")
-        print(f"Market Region: {config.market_region}")
-        print(f"Instrument: {config.instrument}")
-        print(f"Benchmark Symbol: {config.backtest_benchmark}")
-        print("-" * 35)
         self.initialize_qlib()
 
     def initialize_qlib(self):
@@ -218,9 +213,7 @@ class QlibBacktest:
         # Plotting results
         fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
         return_df.plot(ax=axes[0], title='Cumulative Return with Cost', grid=True)
-        # Use the actual benchmark symbol instead of instrument name
-        benchmark_label = self.config.backtest_benchmark if hasattr(self.config, 'backtest_benchmark') else self.config.instrument.upper()
-        axes[0].plot(bench_df['return'], label=f'Benchmark ({benchmark_label})', color='black', linestyle='--')
+        axes[0].plot(bench_df['return'], label=self.config.instrument.upper(), color='black', linestyle='--')
         axes[0].legend()
         axes[0].set_ylabel("Cumulative Return")
 

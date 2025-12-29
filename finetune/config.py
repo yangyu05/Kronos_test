@@ -16,14 +16,9 @@ class Config:
         if self.market_region == 'us':
             self.qlib_data_path = "~/.qlib/qlib_data/us_data"
             self.instrument = 'sp500'  # Options: 'sp500', 'nasdaq100', 'dow30', 'all'
-            # To use custom symbols (including ETFs), set custom_symbols to a list of symbols
-            # Example: self.custom_symbols = ['SPY', 'QQQ', 'DIA', 'AAPL', 'MSFT']
-            # If custom_symbols is None, the instrument name will be used
-            self.custom_symbols = None  # Set to a list of symbols to override instrument
         else:
             self.qlib_data_path = "~/.qlib/qlib_data/cn_data"
             self.instrument = 'csi300'
-            self.custom_symbols = None
 
         # Overall time range for data loading from Qlib.
         self.dataset_begin_time = "2011-01-01"
@@ -137,7 +132,6 @@ class Config:
         self.inference_top_k = 0
         self.inference_sample_count = 5
         self.backtest_batch_size = 1000
-        # Set benchmark based on instrument, but can be overridden if needed
         self.backtest_benchmark = self._set_benchmark(self.instrument)
 
     def _set_benchmark(self, instrument):
