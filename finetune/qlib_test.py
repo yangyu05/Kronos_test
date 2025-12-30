@@ -118,13 +118,14 @@ class QlibBacktest:
         region = REG_US if self.config.market_region == 'us' else REG_CN
         qlib.init(provider_uri=self.config.qlib_data_path, region=region)
 
-    def run_single_backtest(self, signal_series: pd.Series) -> pd.DataFrame:
+    def run_single_backtest(self, signal_series: pd.Series, benchmark: str = None) -> pd.DataFrame:
         """
         Runs a single backtest for a given prediction signal.
 
         Args:
             signal_series (pd.Series): A pandas Series with a MultiIndex
                                        (instrument, datetime) and prediction scores.
+            benchmark (str, optional): Benchmark symbol to use. If None, uses config default.
         Returns:
             pd.DataFrame: A DataFrame containing the performance report.
         """
@@ -155,11 +156,14 @@ class QlibBacktest:
         else:
             end_time_str = self.config.backtest_time_range[1]
         
+        # Use provided benchmark or fall back to config default
+        benchmark_symbol = benchmark if benchmark is not None else self.config.backtest_benchmark
+        
         backtest_config = {
             "start_time": self.config.backtest_time_range[0],
             "end_time": end_time_str,
             "account": 100_000_000,
-            "benchmark": self.config.backtest_benchmark,
+            "benchmark": benchmark_symbol,
             "exchange_kwargs": {
                 "freq": "day", "limit_threshold": 0.095, "deal_price": "open",
                 "open_cost": 0.001, "close_cost": 0.0015, "min_cost": 5,
@@ -188,13 +192,14 @@ class QlibBacktest:
         })
         return report_df
 
-    def run_and_plot_results(self, signals: dict[str, pd.DataFrame]):
+    def run_and_plot_results(self, signals: dict[str, pd.DataFrame], benchmark: str = None):
         """
         Runs backtests for multiple signals and plots the cumulative return curves.
 
         Args:
             signals (dict[str, pd.DataFrame]): A dictionary where keys are signal names
                                                and values are prediction DataFrames.
+            benchmark (str, optional): Benchmark symbol to use. If None, uses config default.
         """
         return_df, ex_return_df, bench_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -203,17 +208,20 @@ class QlibBacktest:
             pred_series = pred_df.stack()
             pred_series.index.names = ['datetime', 'instrument']
             pred_series = pred_series.swaplevel().sort_index()
-            report_df = self.run_single_backtest(pred_series)
+            report_df = self.run_single_backtest(pred_series, benchmark=benchmark)
 
             return_df[signal_name] = report_df['cum_return_w_cost']
             ex_return_df[signal_name] = report_df['cum_ex_return_w_cost']
             if 'return' not in bench_df:
                 bench_df['return'] = report_df['cum_bench']
 
+        # Determine benchmark label for plot
+        benchmark_label = benchmark if benchmark is not None else self.config.backtest_benchmark
+
         # Plotting results
         fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
         return_df.plot(ax=axes[0], title='Cumulative Return with Cost', grid=True)
-        axes[0].plot(bench_df['return'], label=self.config.instrument.upper(), color='black', linestyle='--')
+        axes[0].plot(bench_df['return'], label=f'Benchmark ({benchmark_label})', color='black', linestyle='--')
         axes[0].legend()
         axes[0].set_ylabel("Cumulative Return")
 
@@ -350,6 +358,8 @@ def main():
     parser.add_argument("--device", type=str, default="cuda:1", help="Device for inference (e.g., 'cuda:0', 'cpu')")
     parser.add_argument("--symbols", type=str, nargs='+', default=['QQQ', 'DIA', 'SPY'],
                         help="Symbols to focus on (default: QQQ DIA SPY). Note: If ETFs not available, use stocks like: AAPL MSFT GOOGL")
+    parser.add_argument("--benchmark", type=str, default=None,
+                        help="Benchmark symbol to use for comparison (e.g., 'AAPL', 'SPY'). If not provided, uses the first symbol from --symbols if only one symbol is provided, otherwise uses config default.")
     args = parser.parse_args()
 
     # --- 1. Configuration Setup ---
@@ -405,6 +415,17 @@ def main():
     print(f"\nUsing {len(filtered_test_data)} symbol(s) for backtesting")
     test_data = filtered_test_data
     
+    # Determine benchmark: use --benchmark if provided, otherwise use first symbol if only one symbol, else use config default
+    if args.benchmark:
+        benchmark_symbol = args.benchmark
+        print(f"\nUsing specified benchmark: {benchmark_symbol}")
+    elif len(filtered_test_data) == 1:
+        benchmark_symbol = list(filtered_test_data.keys())[0]
+        print(f"\nUsing single symbol as benchmark: {benchmark_symbol}")
+    else:
+        benchmark_symbol = None  # Will use config default
+        print(f"\nUsing config default benchmark: {base_config.backtest_benchmark}")
+    
     # --- 3. Generate Predictions ---
     model_preds = generate_predictions(run_config, test_data)
 
@@ -421,7 +442,7 @@ def main():
         model_preds = pickle.load(f)
 
     backtester = QlibBacktest(base_config)
-    backtester.run_and_plot_results(model_preds)
+    backtester.run_and_plot_results(model_preds, benchmark=benchmark_symbol)
 
 
 if __name__ == '__main__':
