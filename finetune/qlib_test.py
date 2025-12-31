@@ -23,6 +23,7 @@ from matplotlib import pyplot as plt
 import qlib
 from qlib.config import REG_CN, REG_US
 from qlib.data import D
+from qlib.data.dataset.loader import QlibDataLoader
 from qlib.backtest import backtest, executor, CommonInfrastructure
 from qlib.contrib.evaluate import risk_analysis
 from qlib.contrib.strategy import TopkDropoutStrategy
@@ -118,7 +119,7 @@ class QlibBacktest:
         region = REG_US if self.config.market_region == 'us' else REG_CN
         qlib.init(provider_uri=self.config.qlib_data_path, region=region)
 
-    def run_single_backtest(self, signal_series: pd.Series, benchmark: str = None) -> pd.DataFrame:
+    def run_single_backtest(self, signal_series: pd.Series, benchmark: str = None, end_time: str = None) -> pd.DataFrame:
         """
         Runs a single backtest for a given prediction signal.
 
@@ -126,6 +127,7 @@ class QlibBacktest:
             signal_series (pd.Series): A pandas Series with a MultiIndex
                                        (instrument, datetime) and prediction scores.
             benchmark (str, optional): Benchmark symbol to use. If None, uses config default.
+            end_time (str, optional): End date for backtest (YYYY-MM-DD). If None, uses latest available from Qlib.
         Returns:
             pd.DataFrame: A DataFrame containing the performance report.
         """
@@ -141,17 +143,29 @@ class QlibBacktest:
             "delay_execution": True,
         }
         
-        # Get available calendar and adjust end_time to avoid out-of-bounds error
+        # Get available calendar and determine end_time
         # Qlib's backtest accesses calendar[index + 1], so we need at least one day buffer
         cal = D.calendar()
-        if len(cal) > 1:
+        if len(cal) == 0:
+            raise ValueError("No calendar data available in Qlib!")
+        
+        # Determine end_time: use provided, or latest available, or config default
+        if end_time is not None:
+            requested_end_time = pd.Timestamp(end_time)
             # Use the second-to-last date to ensure calendar[index + 1] is valid
+            safe_end_date = pd.Timestamp(cal[-2]) if len(cal) > 1 else pd.Timestamp(cal[-1])
+            safe_end_time = min(requested_end_time, safe_end_date)
+            if safe_end_time < requested_end_time:
+                print(f"⚠️  Requested end_time {end_time} exceeds available data. Using {safe_end_time.date()}")
+            end_time_str = safe_end_time.strftime('%Y-%m-%d')
+        elif len(cal) > 1:
+            # Use the latest available date (second-to-last for safety)
             safe_end_date = pd.Timestamp(cal[-2])
             configured_end_time = pd.Timestamp(self.config.backtest_time_range[1])
-            # Use the earlier of configured end time or the safe end date
-            safe_end_time = min(configured_end_time, safe_end_date)
-            if safe_end_time < configured_end_time:
-                print(f"⚠️  Adjusting backtest end_time from {configured_end_time.date()} to {safe_end_time.date()} to avoid calendar boundary")
+            # Use the later of configured end time or the safe end date (to use latest available)
+            safe_end_time = max(configured_end_time, safe_end_date)
+            if safe_end_time > configured_end_time:
+                print(f"ℹ️  Using latest available date from Qlib: {safe_end_time.date()} (config had {configured_end_time.date()})")
             end_time_str = safe_end_time.strftime('%Y-%m-%d')
         else:
             end_time_str = self.config.backtest_time_range[1]
@@ -192,7 +206,7 @@ class QlibBacktest:
         })
         return report_df
 
-    def run_and_plot_results(self, signals: dict[str, pd.DataFrame], benchmark: str = None):
+    def run_and_plot_results(self, signals: dict[str, pd.DataFrame], benchmark: str = None, end_time: str = None):
         """
         Runs backtests for multiple signals and plots the cumulative return curves.
 
@@ -200,6 +214,7 @@ class QlibBacktest:
             signals (dict[str, pd.DataFrame]): A dictionary where keys are signal names
                                                and values are prediction DataFrames.
             benchmark (str, optional): Benchmark symbol to use. If None, uses config default.
+            end_time (str, optional): End date for backtest (YYYY-MM-DD). If None, uses latest available from Qlib.
         """
         return_df, ex_return_df, bench_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -208,7 +223,7 @@ class QlibBacktest:
             pred_series = pred_df.stack()
             pred_series.index.names = ['datetime', 'instrument']
             pred_series = pred_series.swaplevel().sort_index()
-            report_df = self.run_single_backtest(pred_series, benchmark=benchmark)
+            report_df = self.run_single_backtest(pred_series, benchmark=benchmark, end_time=end_time)
 
             return_df[signal_name] = report_df['cum_return_w_cost']
             ex_return_df[signal_name] = report_df['cum_ex_return_w_cost']
@@ -236,7 +251,93 @@ class QlibBacktest:
 
 
 # =================================================================================
-# 3. Inference Logic
+# 3. Data Loading from Qlib (for extending beyond preprocessed data)
+# =================================================================================
+
+def load_data_from_qlib(config: Config, symbols: list, start_time: str = None, end_time: str = None) -> dict:
+    """
+    Load data directly from Qlib for specified symbols.
+    
+    Args:
+        config: Config object
+        symbols: List of symbols to load
+        start_time: Start date (YYYY-MM-DD). If None, uses config.test_time_range[0]
+        end_time: End date (YYYY-MM-DD). If None, uses latest available date from Qlib
+    
+    Returns:
+        Dictionary mapping symbol to DataFrame with datetime index and feature columns
+    """
+    # Initialize Qlib
+    region = REG_US if config.market_region == 'us' else REG_CN
+    qlib.init(provider_uri=config.qlib_data_path, region=region)
+    
+    # Get calendar to determine available dates
+    cal = D.calendar()
+    if len(cal) == 0:
+        raise ValueError("No calendar data found in Qlib!")
+    
+    # Determine time range
+    if start_time is None:
+        start_time = config.test_time_range[0]
+    if end_time is None:
+        # Use latest available date (with buffer for predict_window)
+        latest_date = cal[-1]
+        end_time = latest_date.strftime('%Y-%m-%d')
+        print(f"Using latest available date from Qlib: {end_time}")
+    else:
+        # Ensure end_time doesn't exceed available data
+        end_time_ts = pd.Timestamp(end_time)
+        if end_time_ts > cal[-1]:
+            end_time = cal[-1].strftime('%Y-%m-%d')
+            print(f"⚠️  Requested end_time exceeds available data. Using latest available: {end_time}")
+    
+    # Load data fields
+    data_fields_qlib = ['$' + f for f in config.feature_list]
+    
+    # Load data for each symbol
+    data_dict = {}
+    print(f"\nLoading data from Qlib for {len(symbols)} symbol(s) from {start_time} to {end_time}...")
+    
+    for symbol in tqdm(symbols, desc="Loading symbols"):
+        try:
+            # Load data for this symbol
+            data_df = QlibDataLoader(config=data_fields_qlib).load(
+                symbol, start_time, end_time
+            )
+            
+            if data_df.empty:
+                print(f"  ⚠️  {symbol}: No data found")
+                continue
+            
+            # Reshape data
+            symbol_df = data_df[symbol].unstack(level=1)
+            symbol_df.columns = [col.replace('$', '') for col in symbol_df.columns]
+            
+            # Calculate amount if needed
+            if 'amt' in config.feature_list and 'amt' not in symbol_df.columns:
+                if all(col in symbol_df.columns for col in ['open', 'high', 'low', 'close', 'vol']):
+                    symbol_df['amt'] = (symbol_df['open'] + symbol_df['high'] + symbol_df['low'] + symbol_df['close']) / 4 * symbol_df['vol']
+            
+            # Select only requested features
+            available_features = [f for f in config.feature_list if f in symbol_df.columns]
+            symbol_df = symbol_df[available_features]
+            
+            # Remove rows with any NaN values
+            symbol_df = symbol_df.dropna()
+            
+            if len(symbol_df) > 0:
+                data_dict[symbol] = symbol_df
+                print(f"  ✓ {symbol}: {len(symbol_df)} data points ({symbol_df.index.min().date()} to {symbol_df.index.max().date()})")
+            else:
+                print(f"  ⚠️  {symbol}: No valid data after cleaning")
+        except Exception as e:
+            print(f"  ✗ {symbol}: Error loading data - {e}")
+    
+    return data_dict
+
+
+# =================================================================================
+# 4. Inference Logic
 # =================================================================================
 
 def load_models(config: dict) -> tuple[KronosTokenizer, Kronos]:
@@ -349,7 +450,7 @@ def generate_predictions(config: dict, test_data: dict) -> dict[str, pd.DataFram
 
 
 # =================================================================================
-# 4. Main Execution
+# 5. Main Execution
 # =================================================================================
 
 def main():
@@ -360,6 +461,10 @@ def main():
                         help="Symbols to focus on (default: QQQ DIA SPY). Note: If ETFs not available, use stocks like: AAPL MSFT GOOGL")
     parser.add_argument("--benchmark", type=str, default=None,
                         help="Benchmark symbol to use for comparison (e.g., 'AAPL', 'SPY'). If not provided, uses the first symbol from --symbols if only one symbol is provided, otherwise uses config default.")
+    parser.add_argument("--reload-from-qlib", action='store_true',
+                        help="Reload data directly from Qlib instead of using preprocessed pickle file. This allows using the latest available data.")
+    parser.add_argument("--end-date", type=str, default=None,
+                        help="End date for backtesting (YYYY-MM-DD). If not provided, uses the latest available date from Qlib.")
     args = parser.parse_args()
 
     # --- 1. Configuration Setup ---
@@ -389,31 +494,68 @@ def main():
     print("-" * 35)
 
     # --- 2. Load Data ---
-    test_data_path = os.path.join(run_config['data_path'], "test_data.pkl")
-    print(f"Loading test data from {test_data_path}...")
-    with open(test_data_path, 'rb') as f:
-        test_data = pickle.load(f)
-    
-    # Filter to focus on specified symbols
     target_symbols = args.symbols
-    print(f"\nFiltering test data to focus on key symbols: {target_symbols}")
-    filtered_test_data = {}
-    for symbol in target_symbols:
-        if symbol in test_data and len(test_data[symbol]) > 0:
-            filtered_test_data[symbol] = test_data[symbol]
-            print(f"  ✓ {symbol}: {len(test_data[symbol])} data points")
-        else:
-            print(f"  ✗ {symbol}: Not found in test data")
     
-    if len(filtered_test_data) == 0:
-        print("\n⚠️  WARNING: None of the target symbols were found in test data!")
-        print(f"Available symbols (first 50): {list(test_data.keys())[:50]}")
-        print("\nNote: QQQ, DIA, SPY are ETFs and may not be in S&P 500 stock dataset.")
-        print("Try using major stocks like: AAPL MSFT GOOGL AMZN TSLA META")
-        return
+    if args.reload_from_qlib:
+        # Load data directly from Qlib (allows using latest available data)
+        print("\n🔄 Loading data directly from Qlib (bypassing preprocessed pickle file)...")
+        test_data = load_data_from_qlib(base_config, target_symbols, 
+                                        start_time=base_config.test_time_range[0],
+                                        end_time=args.end_date)
+        
+        if len(test_data) == 0:
+            print("\n❌ ERROR: No data could be loaded from Qlib for the specified symbols!")
+            print("Please check:")
+            print("  1. Qlib data path is correct")
+            print("  2. Symbols are valid and available in Qlib")
+            print("  3. Date range is valid")
+            return
+        
+        filtered_test_data = test_data
+    else:
+        # Load from preprocessed pickle file
+        test_data_path = os.path.join(run_config['data_path'], "test_data.pkl")
+        print(f"\nLoading test data from {test_data_path}...")
+        
+        if not os.path.exists(test_data_path):
+            print(f"❌ ERROR: Test data file not found: {test_data_path}")
+            print("\n💡 Tip: Use --reload-from-qlib to load data directly from Qlib")
+            return
+        
+        with open(test_data_path, 'rb') as f:
+            test_data = pickle.load(f)
+        
+        # Filter to focus on specified symbols
+        print(f"\nFiltering test data to focus on key symbols: {target_symbols}")
+        filtered_test_data = {}
+        for symbol in target_symbols:
+            if symbol in test_data and len(test_data[symbol]) > 0:
+                filtered_test_data[symbol] = test_data[symbol]
+                print(f"  ✓ {symbol}: {len(test_data[symbol])} data points")
+            else:
+                print(f"  ✗ {symbol}: Not found in test data")
+        
+        if len(filtered_test_data) == 0:
+            print("\n⚠️  WARNING: None of the target symbols were found in test data!")
+            print(f"Available symbols (first 50): {list(test_data.keys())[:50]}")
+            print("\nNote: QQQ, DIA, SPY are ETFs and may not be in S&P 500 stock dataset.")
+            print("Try using major stocks like: AAPL MSFT GOOGL AMZN TSLA META")
+            print("\n💡 Tip: Use --reload-from-qlib to load data directly from Qlib")
+            return
     
     print(f"\nUsing {len(filtered_test_data)} symbol(s) for backtesting")
     test_data = filtered_test_data
+    
+    # Check date range of loaded data
+    all_dates = []
+    for symbol, df in filtered_test_data.items():
+        if len(df) > 0:
+            all_dates.extend(df.index.tolist())
+    
+    if all_dates:
+        min_date = min(all_dates)
+        max_date = max(all_dates)
+        print(f"Data date range: {min_date.date()} to {max_date.date()}")
     
     # Determine benchmark: use --benchmark if provided, otherwise use first symbol if only one symbol, else use config default
     if args.benchmark:
@@ -441,8 +583,11 @@ def main():
     with open(predictions_file, 'rb') as f:
         model_preds = pickle.load(f)
 
+    # Determine backtest end time
+    backtest_end_time = args.end_date
+    
     backtester = QlibBacktest(base_config)
-    backtester.run_and_plot_results(model_preds, benchmark=benchmark_symbol)
+    backtester.run_and_plot_results(model_preds, benchmark=benchmark_symbol, end_time=backtest_end_time)
 
 
 if __name__ == '__main__':

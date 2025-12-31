@@ -338,10 +338,16 @@ def check_qlib_collector():
     if os.path.exists(collector_path):
         return collector_path
     
-    # Check if it's in the GitHub repo structure
-    github_path = os.path.join(os.path.expanduser('~'), 'qlib', 'scripts', 'data_collector', 'yahoo', 'collector.py')
-    if os.path.exists(github_path):
-        return github_path
+    # Check if it's in the GitHub repo structure (common locations)
+    possible_paths = [
+        os.path.join(os.path.expanduser('~'), 'qlib', 'scripts', 'data_collector', 'yahoo', 'collector.py'),
+        os.path.join(os.path.expanduser('~'), 'qlib_repo', 'scripts', 'data_collector', 'yahoo', 'collector.py'),
+        os.path.join(os.path.expanduser('~'), 'Kronos_test', 'qlib_repo', 'scripts', 'data_collector', 'yahoo', 'collector.py'),
+    ]
+    
+    for github_path in possible_paths:
+        if os.path.exists(github_path):
+            return github_path
     
     return None
 
