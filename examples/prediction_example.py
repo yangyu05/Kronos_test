@@ -123,14 +123,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Use default data file
+  # Use default data file (works backwards from end)
   python prediction_example.py
   
   # Specify custom CSV file
-  python prediction_example.py --csv data/AAPL_1d.csv
+  python prediction_example.py --csv data/AAPL_5min.csv
   
   # Custom parameters
-  python prediction_example.py --csv data/AAPL_1d.csv --lookback 500 --pred-len 100 --device cpu
+  python prediction_example.py --csv data/AAPL_5min.csv --lookback 288 --pred-len 78 --device cuda:0
+  
+  # Specify start date for lookback window
+  python prediction_example.py --csv data/AAPL_5min.csv --start-date "2025-12-10 09:30:00" --lookback 288 --pred-len 78
+  
+  # Daily data with start date
+  python prediction_example.py --csv data/AAPL_1d.csv --start-date "2025-12-15" --lookback 100 --pred-len 20
         """
     )
     
@@ -185,8 +191,8 @@ Examples:
     parser.add_argument(
         '--output',
         type=str,
-        default="prediction_result.png",
-        help="Output plot file path (default: prediction_result.png)"
+        default=None,
+        help="Output plot file path (default: auto-generated with symbol and start date, e.g., prediction_result_aapl_12_11_start.png)"
     )
     parser.add_argument(
         '--model',
@@ -199,6 +205,12 @@ Examples:
         type=str,
         default="NeoQuasar/Kronos-Tokenizer-base",
         help="Tokenizer name from Hugging Face (default: NeoQuasar/Kronos-Tokenizer-base)"
+    )
+    parser.add_argument(
+        '--start-date',
+        type=str,
+        default=None,
+        help="Start date for lookback window (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS). If not provided, works backwards from end of CSV."
     )
     
     args = parser.parse_args()
@@ -235,36 +247,82 @@ Examples:
         print(f"   Required columns: {required_cols}")
         sys.exit(1)
     
-    # Work backwards from the end: use last x days as input, predict next y days (which exist in CSV)
-    # Timeline: [start_idx ... end_idx-x-y ... end_idx-x ... end_idx]
-    #           [          input (x days)          ] [ground truth (y days)]
-    total_needed = args.lookback + args.pred_len
+    # Sort by timestamps to ensure chronological order
+    df = df.sort_values('timestamps').reset_index(drop=True)
     
-    if len(df) < total_needed:
-        print(f"⚠️  Warning: Data has {len(df)} rows, but need at least {total_needed} rows")
-        print(f"   (lookback={args.lookback} + pred_len={args.pred_len})")
-        # Adjust: use what we have
-        if len(df) < args.lookback:
-            print(f"❌ Error: Not enough data even for lookback. Need at least {args.lookback} rows")
-            sys.exit(1)
-        # Use all available data for lookback, and remaining for prediction
-        actual_lookback = len(df) - args.pred_len if len(df) >= args.pred_len else len(df)
-        actual_pred_len = len(df) - actual_lookback
-        print(f"   Adjusted: lookback={actual_lookback}, pred_len={actual_pred_len}")
+    # Determine the start index based on --start-date or work backwards from end
+    if args.start_date is not None:
+        # Find the closest timestamp to the specified start date
+        start_date_ts = pd.to_datetime(args.start_date)
+        print(f"🔍 Looking for start date: {start_date_ts}")
+        
+        # Find the index of the closest timestamp (before or at the specified date)
+        time_diffs = (df['timestamps'] - start_date_ts).abs()
+        closest_idx = time_diffs.idxmin()
+        closest_timestamp = df.loc[closest_idx, 'timestamps']
+        time_diff = (closest_timestamp - start_date_ts).total_seconds() / 3600  # hours
+        
+        print(f"   Found closest timestamp: {closest_timestamp} (diff: {time_diff:.2f} hours)")
+        
+        # Use this as the start of the lookback window
+        input_start_idx = closest_idx
+        
+        # Calculate prediction period indices
+        pred_start_idx = input_start_idx + args.lookback
+        end_idx = pred_start_idx + args.pred_len - 1
+        
+        # Validate we have enough data
+        if end_idx >= len(df):
+            print(f"⚠️  Warning: Requested period extends beyond available data")
+            print(f"   Start index: {input_start_idx}, End index needed: {end_idx}, Available: {len(df) - 1}")
+            if pred_start_idx >= len(df):
+                print(f"❌ Error: Not enough data for lookback period. Need at least {args.lookback} rows from start date")
+                sys.exit(1)
+            # Adjust: use what we have
+            end_idx = len(df) - 1
+            actual_pred_len = end_idx - pred_start_idx + 1
+            actual_lookback = args.lookback
+            print(f"   Adjusted: pred_len={actual_pred_len} (requested: {args.pred_len})")
+        else:
+            actual_lookback = args.lookback
+            actual_pred_len = args.pred_len
+        
+        print(f"📅 Timeline (starting from specified date):")
+        print(f"   Input period: rows {input_start_idx} to {pred_start_idx-1} ({actual_lookback} data points)")
+        print(f"   Prediction period: rows {pred_start_idx} to {end_idx} ({actual_pred_len} data points)")
+        print(f"   Input dates: {df.loc[input_start_idx, 'timestamps']} to {df.loc[pred_start_idx-1, 'timestamps']}")
+        print(f"   Ground truth dates: {df.loc[pred_start_idx, 'timestamps']} to {df.loc[end_idx, 'timestamps']}")
     else:
-        actual_lookback = args.lookback
-        actual_pred_len = args.pred_len
-    
-    # Calculate indices: work backwards from the end
-    end_idx = len(df) - 1  # Last row index
-    pred_start_idx = end_idx - actual_pred_len + 1  # Start of prediction period (ground truth)
-    input_start_idx = pred_start_idx - actual_lookback  # Start of input period
-    
-    print(f"📅 Timeline:")
-    print(f"   Input period: rows {input_start_idx} to {pred_start_idx-1} ({actual_lookback} days)")
-    print(f"   Prediction period: rows {pred_start_idx} to {end_idx} ({actual_pred_len} days)")
-    print(f"   Input dates: {df.loc[input_start_idx, 'timestamps'].date()} to {df.loc[pred_start_idx-1, 'timestamps'].date()}")
-    print(f"   Ground truth dates: {df.loc[pred_start_idx, 'timestamps'].date()} to {df.loc[end_idx, 'timestamps'].date()}")
+        # Work backwards from the end: use last x days as input, predict next y days (which exist in CSV)
+        # Timeline: [start_idx ... end_idx-x-y ... end_idx-x ... end_idx]
+        #           [          input (x days)          ] [ground truth (y days)]
+        total_needed = args.lookback + args.pred_len
+        
+        if len(df) < total_needed:
+            print(f"⚠️  Warning: Data has {len(df)} rows, but need at least {total_needed} rows")
+            print(f"   (lookback={args.lookback} + pred_len={args.pred_len})")
+            # Adjust: use what we have
+            if len(df) < args.lookback:
+                print(f"❌ Error: Not enough data even for lookback. Need at least {args.lookback} rows")
+                sys.exit(1)
+            # Use all available data for lookback, and remaining for prediction
+            actual_lookback = len(df) - args.pred_len if len(df) >= args.pred_len else len(df)
+            actual_pred_len = len(df) - actual_lookback
+            print(f"   Adjusted: lookback={actual_lookback}, pred_len={actual_pred_len}")
+        else:
+            actual_lookback = args.lookback
+            actual_pred_len = args.pred_len
+        
+        # Calculate indices: work backwards from the end
+        end_idx = len(df) - 1  # Last row index
+        pred_start_idx = end_idx - actual_pred_len + 1  # Start of prediction period (ground truth)
+        input_start_idx = pred_start_idx - actual_lookback  # Start of input period
+        
+        print(f"📅 Timeline (working backwards from end):")
+        print(f"   Input period: rows {input_start_idx} to {pred_start_idx-1} ({actual_lookback} data points)")
+        print(f"   Prediction period: rows {pred_start_idx} to {end_idx} ({actual_pred_len} data points)")
+        print(f"   Input dates: {df.loc[input_start_idx, 'timestamps']} to {df.loc[pred_start_idx-1, 'timestamps']}")
+        print(f"   Ground truth dates: {df.loc[pred_start_idx, 'timestamps']} to {df.loc[end_idx, 'timestamps']}")
     
     # Extract input data (x days before prediction period)
     x_df = df.loc[input_start_idx:pred_start_idx-1, ['open', 'high', 'low', 'close', 'volume', 'amount']].reset_index(drop=True)
@@ -298,8 +356,40 @@ Examples:
     # For plotting, we need to know how many rows are input vs prediction
     input_len = actual_lookback  # First part of kline_df is input
     
-    # Update plot function to use custom output path
-    plot_path = args.output
+    # Generate output filename if not provided
+    if args.output is None:
+        # Extract symbol from CSV filename (e.g., "AAPL_5min.csv" -> "AAPL")
+        csv_stem = csv_path.stem  # Get filename without extension
+        # Try to extract symbol (assumes format like "AAPL_5min" or "AAPL" or "XSHG_5min_600977")
+        symbol = None
+        if '_' in csv_stem:
+            # Try first part as symbol
+            potential_symbol = csv_stem.split('_')[0].upper()
+            # Check if it looks like a stock symbol (letters only, 1-5 chars)
+            if potential_symbol.isalpha() and 1 <= len(potential_symbol) <= 5:
+                symbol = potential_symbol.lower()
+        else:
+            # Whole filename might be the symbol
+            if csv_stem.isalpha() and 1 <= len(csv_stem) <= 5:
+                symbol = csv_stem.lower()
+        
+        # Fallback: use "unknown" if we can't extract symbol
+        if symbol is None:
+            symbol = "unknown"
+        
+        # Get start date from actual data
+        start_timestamp = df.loc[input_start_idx, 'timestamps']
+        # Format as MM_DD (e.g., 12_11 for December 11)
+        date_str = f"{start_timestamp.month:02d}_{start_timestamp.day:02d}"
+        
+        # Generate filename: prediction_result_aapl_12_11_start.png
+        output_dir = csv_path.parent / "data" if csv_path.parent.name != "data" else csv_path.parent
+        output_dir.mkdir(exist_ok=True)
+        plot_path = output_dir / f"prediction_result_{symbol}_{date_str}_start.png"
+    else:
+        plot_path = Path(args.output)
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+    
     plot_prediction(kline_df, pred_df, input_len, plot_path=plot_path)
     
     print(f"\n✅ Prediction complete! Plot saved to: {plot_path}")
