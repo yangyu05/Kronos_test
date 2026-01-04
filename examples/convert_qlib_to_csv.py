@@ -29,7 +29,8 @@ def convert_qlib_to_csv(
     start_date: str = None,
     end_date: str = None,
     qlib_data_path: str = None,
-    region: str = None
+    region: str = None,
+    freq: str = None
 ):
     """
     Convert Qlib data for a symbol to CSV format compatible with prediction_example.py
@@ -41,6 +42,7 @@ def convert_qlib_to_csv(
         end_date: End date (YYYY-MM-DD). If None, uses latest available date
         qlib_data_path: Path to Qlib data directory
         region: Market region ('us' or 'cn')
+        freq: Data frequency ('day', '5min', '15min', etc.). If None, tries to detect from config
     """
     # Use config defaults if not provided
     config = Config()
@@ -48,19 +50,30 @@ def convert_qlib_to_csv(
         qlib_data_path = config.qlib_data_path
     if region is None:
         region = config.market_region
+    if freq is None:
+        # Try to detect frequency from config
+        freq = getattr(config, 'data_freq', 'day')
     
     # Initialize Qlib
     qlib_region = REG_US if region == 'us' else REG_CN
     print(f"Initializing Qlib with region: {region} ({qlib_region})")
     print(f"Data path: {qlib_data_path}")
+    print(f"Frequency: {freq}")
     qlib.init(provider_uri=qlib_data_path, region=qlib_region)
     
-    # Get calendar to determine available dates
-    cal = D.calendar()
+    # Get calendar to determine available dates (use specified frequency)
+    if freq == 'day':
+        cal = D.calendar()
+    else:
+        cal = D.calendar(freq=freq)
     if len(cal) == 0:
-        raise ValueError("No calendar data found in Qlib!")
+        raise ValueError(f"No calendar data found in Qlib for frequency '{freq}'!")
     
-    print(f"\nCalendar range: {cal[0].date()} to {cal[-1].date()}")
+    # For intraday data, show datetime range; for daily, show date range
+    if freq == 'day':
+        print(f"\nCalendar range: {cal[0].date()} to {cal[-1].date()}")
+    else:
+        print(f"\nCalendar range: {cal[0]} to {cal[-1]}")
     
     # Determine time range
     if start_date is None:
@@ -90,7 +103,16 @@ def convert_qlib_to_csv(
         # Try loading directly using D.features (doesn't require instrument file)
         try:
             print("  Attempting to load via D.features...")
-            data_df = D.features([symbol.upper()], data_fields_qlib, start_time=start_date, end_time=end_date)
+            # For intraday data, include time in start/end times if not already present
+            if freq != 'day':
+                # For intraday, ensure we have full datetime range
+                start_time_str = f"{start_date} 00:00:00" if len(start_date) == 10 else start_date
+                end_time_str = f"{end_date} 23:59:59" if len(end_date) == 10 else end_date
+            else:
+                start_time_str = start_date
+                end_time_str = end_date
+            
+            data_df = D.features([symbol.upper()], data_fields_qlib, start_time=start_time_str, end_time=end_time_str, freq=freq)
             
             if data_df.empty:
                 raise ValueError(f"No data found for {symbol} in the specified date range")
@@ -182,7 +204,11 @@ def convert_qlib_to_csv(
         if output_path is None:
             output_dir = Path(__file__).parent / "data"
             output_dir.mkdir(exist_ok=True)
-            output_path = output_dir / f"{symbol}_1d.csv"
+            # Use frequency in filename if not daily
+            if freq == 'day':
+                output_path = output_dir / f"{symbol}_1d.csv"
+            else:
+                output_path = output_dir / f"{symbol}_{freq}.csv"
         else:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,6 +283,13 @@ Examples:
         default=None,
         help="Market region (default: from config)"
     )
+    parser.add_argument(
+        '--freq',
+        type=str,
+        default=None,
+        choices=['day', '1min', '5min', '15min', '30min', '1h'],
+        help="Data frequency (default: from config, or 'day')"
+    )
     
     args = parser.parse_args()
     
@@ -267,7 +300,8 @@ Examples:
             start_date=args.start_date,
             end_date=args.end_date,
             qlib_data_path=args.qlib_path,
-            region=args.region
+            region=args.region,
+            freq=args.freq
         )
     except Exception as e:
         print(f"\n❌ Failed to convert data: {e}")

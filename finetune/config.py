@@ -14,19 +14,24 @@ class Config:
         
         # TODO: Update this path to your Qlib data directory.
         if self.market_region == 'us':
-            self.qlib_data_path = "~/.qlib/qlib_data/us_data"
+            self.qlib_data_path = "~/.qlib/qlib_data/us_data_5min"
             self.instrument = 'sp500'  # Options: 'sp500', 'nasdaq100', 'dow30', 'all'
+        
+        # Data frequency: 'day' for daily data, '5min' for 5-minute data
+        # When using 5min, update qlib_data_path to point to 5min data directory
+            self.data_freq = '5min'  # Options: 'day', '5min', '15min', '30min', '1h', '1min'
         else:
             self.qlib_data_path = "~/.qlib/qlib_data/cn_data"
             self.instrument = 'csi300'
 
         # Overall time range for data loading from Qlib.
-        self.dataset_begin_time = "2011-01-01"
-        self.dataset_end_time = '2020-11-10'  # Updated to match available Qlib data
+        # NOTE: 5min data currently only covers 2025-12-03 to 2025-12-31
+        self.dataset_begin_time = "2025-12-03"
+        self.dataset_end_time = '2025-12-31'  # Updated to match actual 5min data range
 
         # Sliding window parameters for creating samples.
-        self.lookback_window = 90  # Number of past time steps for input.
-        self.predict_window = 10  # Number of future time steps for prediction.
+        self.lookback_window = 300  # Number of past time steps for input.
+        self.predict_window = 78  # Number of future time steps for prediction.
         self.max_context = 512  # Maximum context length for the model.
 
         # Features to be used from the raw data.
@@ -39,11 +44,12 @@ class Config:
         # =================================================================
         # Note: The validation/test set starts earlier than the training/validation set ends
         # to account for the `lookback_window`.
-        # Updated time ranges to match available Qlib data (ends 2020-11-10)
-        self.train_time_range = ["2011-01-01", "2018-12-31"]
-        self.val_time_range = ["2018-09-01", "2020-05-31"]
-        self.test_time_range = ["2020-04-01", "2020-11-10"]
-        self.backtest_time_range = ["2020-07-01", "2020-11-10"]  # Updated to match available data
+        # Updated time ranges to match actual 5min data range (2025-12-03 to 2025-12-31)
+        # With only ~1 month of data, we use most for training and smaller splits for val/test
+        self.train_time_range = ["2025-12-03", "2025-12-20"]  # Most data for training
+        self.val_time_range = ["2025-12-15", "2025-12-25"]    # Small validation set
+        self.test_time_range = ["2025-12-20", "2025-12-29"]   # Small test set
+        self.backtest_time_range = ["2025-12-20", "2025-12-29"]  # Latest data for backtesting
 
         # Directory to save the processed, pickled datasets.
         # This will be created automatically if it doesn't exist.
@@ -60,8 +66,8 @@ class Config:
 
         # Number of samples to draw for one "epoch" of training/validation.
         # This is useful for large datasets where a true epoch is too long.
-        self.n_train_iter = 2000 * self.batch_size
-        self.n_val_iter = 400 * self.batch_size
+        self.n_train_iter = 5000 * self.batch_size
+        self.n_val_iter = 1000 * self.batch_size
 
         # Learning rates for different model components.
         self.tokenizer_learning_rate = 2e-4

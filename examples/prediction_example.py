@@ -7,39 +7,112 @@ sys.path.append("../")
 from model import Kronos, KronosTokenizer, KronosPredictor
 
 
-def plot_prediction(kline_df, pred_df, plot_path="prediction_result.png"):
-    pred_df.index = kline_df.index[-pred_df.shape[0]:]
-    sr_close = kline_df['close']
-    sr_pred_close = pred_df['close']
-    sr_close.name = 'Ground Truth'
-    sr_pred_close.name = "Prediction"
-
-    sr_volume = kline_df['volume']
-    sr_pred_volume = pred_df['volume']
-    sr_volume.name = 'Ground Truth'
-    sr_pred_volume.name = "Prediction"
-
-    close_df = pd.concat([sr_close, sr_pred_close], axis=1)
-    volume_df = pd.concat([sr_volume, sr_pred_volume], axis=1)
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
-
-    ax1.plot(close_df['Ground Truth'], label='Ground Truth', color='blue', linewidth=1.5)
-    ax1.plot(close_df['Prediction'], label='Prediction', color='red', linewidth=1.5)
+def plot_prediction(kline_df, pred_df, input_len, plot_path="prediction_result.png"):
+    """
+    Plot predictions vs ground truth, removing market closed periods.
+    
+    Args:
+        kline_df: DataFrame containing both input period and prediction period (ground truth)
+        pred_df: DataFrame containing predictions
+        input_len: Number of rows in kline_df that are input (not prediction period)
+    """
+    # Separate input period from prediction period
+    input_df = kline_df.iloc[:input_len].copy()
+    ground_truth_df = kline_df.iloc[input_len:].copy()
+    
+    # Ensure pred_df has the same index as ground_truth_df for alignment
+    if len(pred_df) != len(ground_truth_df):
+        print(f"⚠️  Warning: Prediction length ({len(pred_df)}) doesn't match ground truth length ({len(ground_truth_df)})")
+        min_len = min(len(pred_df), len(ground_truth_df))
+        pred_df = pred_df.iloc[:min_len]
+        ground_truth_df = ground_truth_df.iloc[:min_len]
+    
+    # Combine all timestamps to create a continuous sequential index
+    # This removes gaps from market closed periods (overnight, weekends, holidays)
+    all_timestamps = pd.concat([input_df['timestamps'], ground_truth_df['timestamps']]).sort_values().reset_index(drop=True)
+    
+    # Create a mapping from timestamp to sequential index (0, 1, 2, ...)
+    # This makes the plot continuous without showing market closed periods
+    timestamp_to_idx = {ts: idx for idx, ts in enumerate(all_timestamps)}
+    
+    # Map timestamps to sequential indices
+    input_seq_idx = [timestamp_to_idx[ts] for ts in input_df['timestamps']]
+    pred_seq_idx = [timestamp_to_idx[ts] for ts in ground_truth_df['timestamps']]
+    
+    # Get values
+    input_close = input_df['close'].values
+    input_volume = input_df['volume'].values
+    gt_close = ground_truth_df['close'].values
+    gt_volume = ground_truth_df['volume'].values
+    pred_close = pred_df['close'].values
+    pred_volume = pred_df['volume'].values
+    
+    # Create figure
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    # Plot close prices using sequential index
+    ax1.plot(input_seq_idx, input_close, label='Input (Historical)', color='gray', linewidth=1.5, alpha=0.7)
+    ax1.plot(pred_seq_idx, gt_close, label='Ground Truth', color='blue', linewidth=1.5)
+    ax1.plot(pred_seq_idx, pred_close, label='Prediction', color='red', linewidth=1.5, linestyle='--')
     ax1.set_ylabel('Close Price', fontsize=14)
-    ax1.legend(loc='lower left', fontsize=12)
-    ax1.grid(True)
-
-    ax2.plot(volume_df['Ground Truth'], label='Ground Truth', color='blue', linewidth=1.5)
-    ax2.plot(volume_df['Prediction'], label='Prediction', color='red', linewidth=1.5)
+    ax1.legend(loc='best', fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title('Price Prediction vs Ground Truth', fontsize=16, fontweight='bold')
+    
+    # Add vertical line to separate input from prediction
+    ax1.axvline(x=pred_seq_idx[0], color='green', linestyle=':', linewidth=2, alpha=0.5, label='Prediction Start')
+    
+    # Plot volumes using sequential index
+    ax2.plot(input_seq_idx, input_volume, label='Input (Historical)', color='gray', linewidth=1.5, alpha=0.7)
+    ax2.plot(pred_seq_idx, gt_volume, label='Ground Truth', color='blue', linewidth=1.5)
+    ax2.plot(pred_seq_idx, pred_volume, label='Prediction', color='red', linewidth=1.5, linestyle='--')
     ax2.set_ylabel('Volume', fontsize=14)
-    ax2.legend(loc='upper left', fontsize=12)
-    ax2.grid(True)
-
+    ax2.set_xlabel('Time Step (Market Hours Only)', fontsize=14)
+    ax2.legend(loc='best', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_title('Volume Prediction vs Ground Truth', fontsize=16, fontweight='bold')
+    
+    # Add vertical line to separate input from prediction
+    ax2.axvline(x=pred_seq_idx[0], color='green', linestyle=':', linewidth=2, alpha=0.5)
+    
+    # Custom x-axis labels: show timestamps only at selected positions
+    # Show labels at regular intervals and at key points (start, prediction start, end)
+    num_ticks = min(10, len(all_timestamps))
+    tick_positions = []
+    tick_labels = []
+    
+    # Always show first and last
+    tick_positions.append(0)
+    tick_labels.append(all_timestamps.iloc[0].strftime('%Y-%m-%d\n%H:%M'))
+    
+    # Show prediction start
+    pred_start_pos = len(input_df)
+    if pred_start_pos not in tick_positions:
+        tick_positions.append(pred_start_pos)
+        tick_labels.append(all_timestamps.iloc[pred_start_pos].strftime('%Y-%m-%d\n%H:%M'))
+    
+    # Show last
+    last_pos = len(all_timestamps) - 1
+    if last_pos not in tick_positions:
+        tick_positions.append(last_pos)
+        tick_labels.append(all_timestamps.iloc[last_pos].strftime('%Y-%m-%d\n%H:%M'))
+    
+    # Add evenly spaced intermediate ticks
+    step = max(1, (len(all_timestamps) - 1) // (num_ticks - len(tick_positions)))
+    for i in range(step, len(all_timestamps) - 1, step):
+        if i not in tick_positions:
+            tick_positions.append(i)
+            tick_labels.append(all_timestamps.iloc[i].strftime('%Y-%m-%d\n%H:%M'))
+    
+    # Sort and apply
+    tick_positions, tick_labels = zip(*sorted(zip(tick_positions, tick_labels)))
+    ax2.set_xticks(tick_positions)
+    ax2.set_xticklabels(tick_labels, rotation=45, ha='right')
+    
     plt.tight_layout()
-    # Save plot instead of showing (useful for headless servers)
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     print(f"📊 Plot saved to: {plot_path}")
+    print(f"   Note: Market closed periods have been removed from the plot")
     # Uncomment the line below if you want to display the plot interactively
     # plt.show()
 
@@ -162,32 +235,46 @@ Examples:
         print(f"   Required columns: {required_cols}")
         sys.exit(1)
     
-    # Check if we have enough data
-    if len(df) < args.lookback + args.pred_len:
-        print(f"⚠️  Warning: Data has {len(df)} rows, but need at least {args.lookback + args.pred_len} rows")
-        print(f"   Using available data: lookback={min(args.lookback, len(df) - args.pred_len)}, pred_len={args.pred_len}")
-        actual_lookback = min(args.lookback, len(df) - args.pred_len)
-        if actual_lookback <= 0:
-            print(f"❌ Error: Not enough data for prediction")
+    # Work backwards from the end: use last x days as input, predict next y days (which exist in CSV)
+    # Timeline: [start_idx ... end_idx-x-y ... end_idx-x ... end_idx]
+    #           [          input (x days)          ] [ground truth (y days)]
+    total_needed = args.lookback + args.pred_len
+    
+    if len(df) < total_needed:
+        print(f"⚠️  Warning: Data has {len(df)} rows, but need at least {total_needed} rows")
+        print(f"   (lookback={args.lookback} + pred_len={args.pred_len})")
+        # Adjust: use what we have
+        if len(df) < args.lookback:
+            print(f"❌ Error: Not enough data even for lookback. Need at least {args.lookback} rows")
             sys.exit(1)
+        # Use all available data for lookback, and remaining for prediction
+        actual_lookback = len(df) - args.pred_len if len(df) >= args.pred_len else len(df)
+        actual_pred_len = len(df) - actual_lookback
+        print(f"   Adjusted: lookback={actual_lookback}, pred_len={actual_pred_len}")
     else:
         actual_lookback = args.lookback
+        actual_pred_len = args.pred_len
     
-    x_df = df.loc[:actual_lookback-1, ['open', 'high', 'low', 'close', 'volume', 'amount']]
-    x_timestamp = df.loc[:actual_lookback-1, 'timestamps']
+    # Calculate indices: work backwards from the end
+    end_idx = len(df) - 1  # Last row index
+    pred_start_idx = end_idx - actual_pred_len + 1  # Start of prediction period (ground truth)
+    input_start_idx = pred_start_idx - actual_lookback  # Start of input period
     
-    # For y_timestamp, use actual future timestamps if available, otherwise generate
-    if len(df) >= actual_lookback + args.pred_len:
-        y_timestamp = df.loc[actual_lookback:actual_lookback+args.pred_len-1, 'timestamps']
-    else:
-        # Generate timestamps based on the last timestamp and frequency
-        last_ts = df.loc[actual_lookback-1, 'timestamps']
-        freq = pd.infer_freq(df['timestamps'].head(10))
-        if freq is None:
-            # Default to daily if can't infer
-            freq = 'D'
-        y_timestamp = pd.date_range(start=last_ts + pd.Timedelta(days=1), periods=args.pred_len, freq=freq)
-        print(f"   Generated {args.pred_len} future timestamps (freq={freq})")
+    print(f"📅 Timeline:")
+    print(f"   Input period: rows {input_start_idx} to {pred_start_idx-1} ({actual_lookback} days)")
+    print(f"   Prediction period: rows {pred_start_idx} to {end_idx} ({actual_pred_len} days)")
+    print(f"   Input dates: {df.loc[input_start_idx, 'timestamps'].date()} to {df.loc[pred_start_idx-1, 'timestamps'].date()}")
+    print(f"   Ground truth dates: {df.loc[pred_start_idx, 'timestamps'].date()} to {df.loc[end_idx, 'timestamps'].date()}")
+    
+    # Extract input data (x days before prediction period)
+    x_df = df.loc[input_start_idx:pred_start_idx-1, ['open', 'high', 'low', 'close', 'volume', 'amount']].reset_index(drop=True)
+    x_timestamp = df.loc[input_start_idx:pred_start_idx-1, 'timestamps'].reset_index(drop=True)
+    
+    # Extract ground truth timestamps for prediction period (y days)
+    y_timestamp = df.loc[pred_start_idx:end_idx, 'timestamps'].reset_index(drop=True)
+    
+    # For plotting: show input period + prediction period (with ground truth for comparison)
+    kline_df = df.loc[input_start_idx:end_idx].copy()
     
     # 4. Make Prediction
     print(f"🔮 Making predictions...")
@@ -206,15 +293,14 @@ Examples:
     print("\n📈 Forecasted Data Head:")
     print(pred_df.head())
     
-    # Combine historical and forecasted data for plotting
-    if len(df) >= actual_lookback + args.pred_len:
-        kline_df = df.loc[:actual_lookback+args.pred_len-1]
-    else:
-        kline_df = df.loc[:actual_lookback]
+    # kline_df is already set correctly on line 204: df.loc[input_start_idx:end_idx]
+    # It contains: input period (actual_lookback rows) + prediction period (actual_pred_len rows)
+    # For plotting, we need to know how many rows are input vs prediction
+    input_len = actual_lookback  # First part of kline_df is input
     
     # Update plot function to use custom output path
     plot_path = args.output
-    plot_prediction(kline_df, pred_df, plot_path=plot_path)
+    plot_prediction(kline_df, pred_df, input_len, plot_path=plot_path)
     
     print(f"\n✅ Prediction complete! Plot saved to: {plot_path}")
 
